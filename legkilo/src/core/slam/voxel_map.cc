@@ -52,22 +52,21 @@ void VoxelOctoTree::init_plane(const std::vector<pointWithVar> &points, VoxelPla
     }
     plane->center_ = plane->center_ / plane->points_size_;
     plane->covariance_ = plane->covariance_ / plane->points_size_ - plane->center_ * plane->center_.transpose();
-    Eigen::EigenSolver<Eigen::Matrix3d> es(plane->covariance_);
-    Eigen::Matrix3cd evecs = es.eigenvectors();
-    Eigen::Vector3cd evals = es.eigenvalues();
-    Eigen::Vector3d evalsReal;
-    evalsReal = evals.real();
-    Eigen::Matrix3f::Index evalsMin, evalsMax;
-    evalsReal.rowwise().sum().minCoeff(&evalsMin);
-    evalsReal.rowwise().sum().maxCoeff(&evalsMax);
-    int evalsMid = 3 - evalsMin - evalsMax;
-    // if(evalsMid >= 3){
-    //   std::cout << static_cast<int>(evalsMin) << " " << static_cast<int>(evalsMax) << std::endl;
-    //   throw std::runtime_error("wrong evals mid index");
-    // }
-    Eigen::Vector3d evecMin = evecs.real().col(evalsMin);
-    Eigen::Vector3d evecMid = evecs.real().col(evalsMid);
-    Eigen::Vector3d evecMax = evecs.real().col(evalsMax);
+    plane->covariance_ = 0.5 * (plane->covariance_ + plane->covariance_.transpose());
+
+    Eigen::SelfAdjointEigenSolver<Eigen::Matrix3d> es(plane->covariance_);
+    if (es.info() != Eigen::Success) {
+        plane->is_update_ = true;
+        plane->is_plane_ = false;
+        return;
+    }
+
+    Eigen::Matrix3d evecs = es.eigenvectors();
+    Eigen::Vector3d evalsReal = es.eigenvalues();
+
+    const int evalsMin = 0;
+    const int evalsMid = 1;
+    const int evalsMax = 2;
     Eigen::Matrix3d J_Q;
     J_Q << 1.0 / plane->points_size_, 0, 0, 0, 1.0 / plane->points_size_, 0, 0, 0, 1.0 / plane->points_size_;
     // && evalsReal(evalsMid) > 0.05
@@ -78,25 +77,29 @@ void VoxelOctoTree::init_plane(const std::vector<pointWithVar> &points, VoxelPla
             Eigen::Matrix3d F;
             for (int m = 0; m < 3; m++) {
                 if (m != (int)evalsMin) {
-                    Eigen::Matrix<double, 1, 3> F_m = (points[i].point_w - plane->center_).transpose() /
-                                                      ((plane->points_size_) * (evalsReal[evalsMin] - evalsReal[m])) *
-                                                      (evecs.real().col(m) * evecs.real().col(evalsMin).transpose() +
-                                                       evecs.real().col(evalsMin) * evecs.real().col(m).transpose());
-                    F.row(m) = F_m;
+                    double denom = (plane->points_size_) * (evalsReal[evalsMin] - evalsReal[m]);
+                    if (std::abs(denom) < 1e-12) {
+                        F.row(m).setZero();
+                    } else {
+                        Eigen::Matrix<double, 1, 3> F_m = (points[i].point_w - plane->center_).transpose() / denom *
+                                                          (evecs.col(m) * evecs.col(evalsMin).transpose() +
+                                                           evecs.col(evalsMin) * evecs.col(m).transpose());
+                        F.row(m) = F_m;
+                    }
                 } else {
                     Eigen::Matrix<double, 1, 3> F_m;
                     F_m << 0, 0, 0;
                     F.row(m) = F_m;
                 }
             }
-            J.block<3, 3>(0, 0) = evecs.real() * F;
+            J.block<3, 3>(0, 0) = evecs * F;
             J.block<3, 3>(3, 0) = J_Q;
             plane->plane_var_ += J * points[i].var * J.transpose();
         }
 
-        plane->normal_ << evecs.real()(0, evalsMin), evecs.real()(1, evalsMin), evecs.real()(2, evalsMin);
-        plane->y_normal_ << evecs.real()(0, evalsMid), evecs.real()(1, evalsMid), evecs.real()(2, evalsMid);
-        plane->x_normal_ << evecs.real()(0, evalsMax), evecs.real()(1, evalsMax), evecs.real()(2, evalsMax);
+        plane->normal_ << evecs(0, evalsMin), evecs(1, evalsMin), evecs(2, evalsMin);
+        plane->y_normal_ << evecs(0, evalsMid), evecs(1, evalsMid), evecs(2, evalsMid);
+        plane->x_normal_ << evecs(0, evalsMax), evecs(1, evalsMax), evecs(2, evalsMax);
         plane->min_eigen_value_ = evalsReal(evalsMin);
         plane->mid_eigen_value_ = evalsReal(evalsMid);
         plane->max_eigen_value_ = evalsReal(evalsMax);
