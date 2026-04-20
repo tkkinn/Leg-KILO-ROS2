@@ -5,7 +5,6 @@
 #include <memory>
 #include <mutex>
 #include <string>
-#include <thread>
 
 #include "common/eigen_types.hpp"
 #include "common/pcd_saver.hpp"
@@ -14,16 +13,16 @@
 #include "common/trajectory_saver.hpp"
 #include "interface/ros1/options.h"
 
-#include <geometry_msgs/PoseStamped.h>
-#include <nav_msgs/Odometry.h>
-#include <nav_msgs/Path.h>
-#include <ros/ros.h>
-#include <sensor_msgs/Imu.h>
-#include <sensor_msgs/JointState.h>
-#include <sensor_msgs/PointCloud2.h>
-#include <tf/transform_broadcaster.h>
-#include <tf/transform_datatypes.h>
-#include <unitree_legged_msgs/HighState.h>
+#include <geometry_msgs/msg/pose_stamped.hpp>
+#include <geometry_msgs/msg/transform_stamped.hpp>
+#include <nav_msgs/msg/odometry.hpp>
+#include <nav_msgs/msg/path.hpp>
+#include <rclcpp/rclcpp.hpp>
+#include <sensor_msgs/msg/imu.hpp>
+#include <sensor_msgs/msg/joint_state.hpp>
+#include <sensor_msgs/msg/point_cloud2.hpp>
+#include <tf2_ros/transform_broadcaster.h>
+#include <unitree_legged_msgs/msg/high_state.hpp>
 
 namespace legkilo {
 class Kinematics;
@@ -38,7 +37,7 @@ class RosInterface {
     EIGEN_MAKE_ALIGNED_OPERATOR_NEW
 
     RosInterface() = delete;
-    RosInterface(ros::NodeHandle& nh);
+    explicit RosInterface(rclcpp::Node::SharedPtr node);
     ~RosInterface();
 
     void rosInit(const std::string& config_file);
@@ -49,44 +48,35 @@ class RosInterface {
     void subscribeLidar();
     void subscribeKinematicImu();
     void subscribeImu();
-    void lidarLoop();
-    void imuLoop();
-    void kinematicImuLoop();
-    void lidarCallBack(const sensor_msgs::PointCloud2::ConstPtr& msg);
-    void imuCallBack(const sensor_msgs::Imu::ConstPtr& msg);
-    void kinematicImuCallBack(const unitree_legged_msgs::HighState::ConstPtr& msg);
+    void lidarCallBack(const sensor_msgs::msg::PointCloud2::ConstSharedPtr& msg);
+    void imuCallBack(const sensor_msgs::msg::Imu::ConstSharedPtr& msg);
+    void kinematicImuCallBack(const unitree_legged_msgs::msg::HighState::ConstSharedPtr& msg);
     bool syncPackage();
     void runReset();
     void publishOdomTFPath(double end_time);
     void publishPointcloudWorld(double end_time);
     void publishPointcloudBody(double end_time);  // without undistort
 
-    ros::NodeHandle& nh_;
+    rclcpp::Node::SharedPtr node_;
 
     // subscriber
-    ros::Subscriber sub_lidar_raw_;
-    ros::Subscriber sub_imu_raw_;
-    ros::Subscriber sub_kinematic_raw_;
+    rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr sub_lidar_raw_;
+    rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr sub_imu_raw_;
+    rclcpp::Subscription<unitree_legged_msgs::msg::HighState>::SharedPtr sub_kinematic_raw_;
 
     // publisher
-    ros::Publisher pub_pointcloud_body_;
-    ros::Publisher pub_pointcloud_world_;
-    ros::Publisher pub_path_;
-    ros::Publisher pub_odom_world_;
-    ros::Publisher pub_joint_state_;
+    rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub_pointcloud_body_;
+    rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub_pointcloud_world_;
+    rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr pub_path_;
+    rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr pub_odom_world_;
+    rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr pub_joint_state_;
 
-    nav_msgs::Odometry odom_world_;
-    nav_msgs::Path path_world_;
-    tf::TransformBroadcaster br_;
-    tf::Transform transform_;
-    tf::Quaternion q_tf_;
+    nav_msgs::msg::Odometry odom_world_;
+    nav_msgs::msg::Path path_world_;
+    geometry_msgs::msg::TransformStamped tf_msg_;
+    std::unique_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
     Eigen::Quaterniond q_eigen_;
-    geometry_msgs::PoseStamped pose_path_;
-
-    // sub thread
-    std::unique_ptr<std::thread> lidar_thread_;
-    std::unique_ptr<std::thread> imu_thread_;
-    std::unique_ptr<std::thread> kinematic_thread_;
+    geometry_msgs::msg::PoseStamped pose_path_;
 
     // module
     std::unique_ptr<LidarProcessing> lidar_processing_;
@@ -97,7 +87,7 @@ class RosInterface {
 
     // meaure
     std::deque<common::LidarScan> lidar_cache_;
-    std::deque<sensor_msgs::Imu::Ptr> imu_cache_;
+    std::deque<sensor_msgs::msg::Imu::SharedPtr> imu_cache_;
     std::deque<common::KinImuMeas> kin_imu_cache_;
     common::MeasGroup measure_;
 

@@ -3,7 +3,7 @@
 
 #include "common/sensor_types.hpp"
 
-#include <unitree_legged_msgs/HighState.h>
+#include <unitree_legged_msgs/msg/high_state.hpp>
 
 namespace legkilo {
 
@@ -43,7 +43,7 @@ class Kinematics {
           contacts_(std::vector<ContactDetector>(
               4, ContactDetector(config.contact_force_threshold_up, config.contact_force_threshold_down))) {}
 
-    void processing(const unitree_legged_msgs::HighState& high_state, common::KinImuMeas& kin_imu_meas);
+    void processing(const unitree_legged_msgs::msg::HighState& high_state, common::KinImuMeas& kin_imu_meas);
 
    private:
     void caculateFootPosVel(const double (&foot_angle)[4][3], const double (&foot_angle_vel)[4][3],

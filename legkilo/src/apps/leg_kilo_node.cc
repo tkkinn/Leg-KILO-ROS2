@@ -1,7 +1,7 @@
 #include <csignal>
 #include <memory>
 
-#include <unistd.h>
+#include <rclcpp/rclcpp.hpp>
 
 #include "common/glog_utils.hpp"
 #include "common/timer_utils.hpp"
@@ -10,17 +10,18 @@
 DEFINE_string(config_file, "config/leg_fusion.yaml", "Path to the YAML file");
 void sigHandle(int sig) {
     legkilo::options::FLAG_EXIT.store(true);
+    rclcpp::shutdown();
     LOG(INFO) << "catch sig " << sig << "  FLAG_EXIT = True";
 }
 
 int main(int argc, char** argv) {
-    ros::init(argc, argv, "legkilo");
-    ros::NodeHandle nh("legkilo");
+    rclcpp::init(argc, argv);
 
     signal(SIGINT, sigHandle);
 
     std::unique_ptr<legkilo::Logging> logging(new legkilo::Logging(argc, argv, "logs"));
-    std::unique_ptr<legkilo::RosInterface> ros_interface_node = std::make_unique<legkilo::RosInterface>(nh);
+    auto node = std::make_shared<rclcpp::Node>("legkilo");
+    std::unique_ptr<legkilo::RosInterface> ros_interface_node = std::make_unique<legkilo::RosInterface>(node);
 
     if (FLAGS_config_file.empty()) {
         LOG(ERROR) << "YAML configuration file path not provided. Use --config_path=<path>.";
@@ -31,8 +32,12 @@ int main(int argc, char** argv) {
 
     LOG(INFO) << "Leg KILO Node Starts";
 
-    ros::Rate rate(5000);
-    while (ros::ok() && !legkilo::options::FLAG_EXIT.load()) {
+    rclcpp::executors::MultiThreadedExecutor executor;
+    executor.add_node(node);
+
+    rclcpp::WallRate rate(5000.0);
+    while (rclcpp::ok() && !legkilo::options::FLAG_EXIT.load()) {
+        executor.spin_some();
         ros_interface_node->run();
         rate.sleep();
     }
@@ -44,5 +49,6 @@ int main(int argc, char** argv) {
     LOG(INFO) << "Leg KILO Node Ends";
     legkilo::Timer::logAllAverTime();
     logging->flushLogFiles();
+    rclcpp::shutdown();
     return 0;
 }

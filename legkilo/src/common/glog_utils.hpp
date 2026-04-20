@@ -20,7 +20,7 @@ class Logging {
     void flushLogFiles();
 };
 
-Logging::Logging(int argc, char** argv, std::string log_dir) {
+inline Logging::Logging(int argc, char** argv, std::string log_dir) {
     log_dir = std::string(ROOT_DIR) + log_dir;
     if (!createLogFile(log_dir)) { throw std::runtime_error("Create Log File Failed"); }
 
@@ -35,14 +35,14 @@ Logging::Logging(int argc, char** argv, std::string log_dir) {
               << "\033[0m" << std::endl;
 }
 
-Logging::~Logging() {
+inline Logging::~Logging() {
     google::ShutdownGoogleLogging();
     std::cout << "\033[33m"
               << "GLOG OFF"
               << "\033[0m" << std::endl;
 }
 
-bool Logging::createLogFile(std::string dir) {
+inline bool Logging::createLogFile(std::string dir) {
     if (!fs::exists(dir)) {
         std::cout << "Creating Log File" << std::endl;
         try {
@@ -62,7 +62,7 @@ bool Logging::createLogFile(std::string dir) {
     return true;
 }
 
-void Logging::flushLogFiles() {
+inline void Logging::flushLogFiles() {
     google::FlushLogFiles(google::INFO);
     google::FlushLogFiles(google::WARNING);
     google::FlushLogFiles(google::ERROR);

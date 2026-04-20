@@ -432,9 +432,8 @@ void VoxelMapManager::build_single_residual(pointWithVar &pv, const VoxelOctoTre
 void VoxelMapManager::pubVoxelMap() {
     double max_trace = 0.25;
     double pow_num = 0.2;
-    ros::Rate loop(500);
     float use_alpha = 0.8;
-    visualization_msgs::MarkerArray voxel_plane;
+    visualization_msgs::msg::MarkerArray voxel_plane;
     voxel_plane.markers.reserve(1000000);
     std::vector<VoxelPlane> pub_plane_list;
     for (auto iter = voxel_map_.begin(); iter != voxel_map_.end(); iter++) {
@@ -457,8 +456,7 @@ void VoxelMapManager::pubVoxelMap() {
         }
         pubSinglePlane(voxel_plane, "plane", pub_plane_list[i], alpha, plane_rgb);
     }
-    voxel_map_pub_.publish(voxel_plane);
-    loop.sleep();
+    if (voxel_map_pub_) { voxel_map_pub_->publish(voxel_plane); }
 }
 
 void VoxelMapManager::GetUpdatePlane(const VoxelOctoTree *current_octo, const int pub_max_voxel_layer,
@@ -477,19 +475,19 @@ void VoxelMapManager::GetUpdatePlane(const VoxelOctoTree *current_octo, const in
     return;
 }
 
-void VoxelMapManager::pubSinglePlane(visualization_msgs::MarkerArray &plane_pub, const std::string plane_ns,
+void VoxelMapManager::pubSinglePlane(visualization_msgs::msg::MarkerArray &plane_pub, const std::string plane_ns,
                                      const VoxelPlane &single_plane, const float alpha, const Eigen::Vector3d rgb) {
-    visualization_msgs::Marker plane;
+    visualization_msgs::msg::Marker plane;
     plane.header.frame_id = "camera_init";
-    plane.header.stamp = ros::Time();
+    plane.header.stamp = builtin_interfaces::msg::Time();
     plane.ns = plane_ns;
     plane.id = single_plane.id_;
-    plane.type = visualization_msgs::Marker::CYLINDER;
-    plane.action = visualization_msgs::Marker::ADD;
+    plane.type = visualization_msgs::msg::Marker::CYLINDER;
+    plane.action = visualization_msgs::msg::Marker::ADD;
     plane.pose.position.x = single_plane.center_[0];
     plane.pose.position.y = single_plane.center_[1];
     plane.pose.position.z = single_plane.center_[2];
-    geometry_msgs::Quaternion q;
+    geometry_msgs::msg::Quaternion q;
     CalcVectQuation(single_plane.x_normal_, single_plane.y_normal_, single_plane.normal_, q);
     plane.pose.orientation = q;
     plane.scale.x = 3 * sqrt(single_plane.max_eigen_value_);
@@ -499,12 +497,12 @@ void VoxelMapManager::pubSinglePlane(visualization_msgs::MarkerArray &plane_pub,
     plane.color.r = rgb(0);
     plane.color.g = rgb(1);
     plane.color.b = rgb(2);
-    plane.lifetime = ros::Duration();
+    plane.lifetime = rclcpp::Duration::from_seconds(0.0);
     plane_pub.markers.push_back(plane);
 }
 
 void VoxelMapManager::CalcVectQuation(const Eigen::Vector3d &x_vec, const Eigen::Vector3d &y_vec,
-                                      const Eigen::Vector3d &z_vec, geometry_msgs::Quaternion &q) {
+                                      const Eigen::Vector3d &z_vec, geometry_msgs::msg::Quaternion &q) {
     Eigen::Matrix3d rot;
     rot << x_vec(0), x_vec(1), x_vec(2), y_vec(0), y_vec(1), y_vec(2), z_vec(0), z_vec(1), z_vec(2);
     Eigen::Matrix3d rotation = rot.transpose();

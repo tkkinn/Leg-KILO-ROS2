@@ -6,7 +6,7 @@
 #include <string>
 
 #include <pcl/filters/voxel_grid.h>
-#include <sensor_msgs/Imu.h>
+#include <sensor_msgs/msg/imu.hpp>
 
 #include "common/eigen_types.hpp"
 #include "common/pcl_types.h"
@@ -38,7 +38,7 @@ class KILO {
     inline void pointLidarToWorld(const PointType& point_lidar, PointType& point_world);
 
     // Per-sensor handlers
-    bool predictUpdateImu(const sensor_msgs::ImuPtr& imu);
+    bool predictUpdateImu(const sensor_msgs::msg::Imu::SharedPtr& imu);
     bool predictUpdateKinImu(const common::KinImuMeas& kin_imu);
     bool predictUpdatePoint(double current_time, size_t idx_i, size_t idx_j, const PointCloudType& cloud_down_body,
                             PointCloudType& cloud_down_world, size_t& success_pts_size_out);

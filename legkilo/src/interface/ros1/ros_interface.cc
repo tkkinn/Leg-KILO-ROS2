@@ -1,14 +1,9 @@
 #include "interface/ros1/ros_interface.h"
 
+#include <cmath>
+#include <functional>
 #include <iomanip>
-#include <iostream>
 #include <utility>
-
-#include <ros/callback_queue.h>
-#include <ros/ros.h>
-#include <sensor_msgs/Imu.h>
-#include <sensor_msgs/JointState.h>
-#include <sensor_msgs/PointCloud2.h>
 
 #include "common/timer_utils.hpp"
 #include "common/yaml_helper.hpp"
@@ -18,49 +13,52 @@
 
 namespace legkilo {
 
-const bool time_list(PointType& x, PointType& y) { return (x.curvature < y.curvature); }
+namespace {
 
-#define THREAD_SLEEP(ms) std::this_thread::sleep_for(std::chrono::milliseconds(ms))
+inline double stampToSec(const builtin_interfaces::msg::Time& stamp) {
+    return static_cast<double>(stamp.sec) + 1e-9 * static_cast<double>(stamp.nanosec);
+}
 
-RosInterface::RosInterface(ros::NodeHandle& nh) : nh_(nh) {
+inline builtin_interfaces::msg::Time secToStamp(double sec) {
+    builtin_interfaces::msg::Time stamp;
+    const auto whole_sec = static_cast<int32_t>(std::floor(sec));
+    const double frac_sec = sec - static_cast<double>(whole_sec);
+    stamp.sec = whole_sec;
+    stamp.nanosec = static_cast<uint32_t>(std::llround(frac_sec * 1e9));
+    if (stamp.nanosec >= 1000000000U) {
+        stamp.sec += 1;
+        stamp.nanosec -= 1000000000U;
+    }
+    return stamp;
+}
+
+}  // namespace
+
+RosInterface::RosInterface(rclcpp::Node::SharedPtr node) : node_(std::move(node)) {
     LOG(INFO) << "Ros Interface is being Constructed";
-    pub_odom_world_ = nh_.advertise<nav_msgs::Odometry>("/Odomtry", 10000);
-    pub_path_ = nh.advertise<nav_msgs::Path>("/path", 10000);
-    pub_pointcloud_world_ = nh.advertise<sensor_msgs::PointCloud2>("/cloud_registered", 10000);
-    pub_pointcloud_body_ = nh.advertise<sensor_msgs::PointCloud2>("/cloud_registered_body", 10000);
-    if (pub_joint_tf_enable_) { pub_joint_state_ = nh_.advertise<sensor_msgs::JointState>("/joint_states", 10000); }
+    pub_odom_world_ = node_->create_publisher<nav_msgs::msg::Odometry>("/Odomtry", rclcpp::QoS(10000));
+    pub_path_ = node_->create_publisher<nav_msgs::msg::Path>("/path", rclcpp::QoS(10000));
+    pub_pointcloud_world_ =
+        node_->create_publisher<sensor_msgs::msg::PointCloud2>("/cloud_registered", rclcpp::QoS(10000));
+    pub_pointcloud_body_ =
+        node_->create_publisher<sensor_msgs::msg::PointCloud2>("/cloud_registered_body", rclcpp::QoS(10000));
+    pub_joint_state_ = node_->create_publisher<sensor_msgs::msg::JointState>("/joint_states", rclcpp::QoS(10000));
+    tf_broadcaster_ = std::make_unique<tf2_ros::TransformBroadcaster>(node_);
 
     odom_world_.header.frame_id = "camera_init";
     odom_world_.child_frame_id = "base";
     path_world_.header.frame_id = "camera_init";
-    path_world_.header.stamp = ros::Time::now();
+    path_world_.header.stamp = node_->now();
     pose_path_.header.frame_id = "camera_init";
+    tf_msg_.header.frame_id = "camera_init";
+    tf_msg_.child_frame_id = "base";
 }
 
 RosInterface::~RosInterface() {
     LOG(INFO) << "Ros Interface is being Destructed";
-
-    // Shutdown subscribers first to prevent new callbacks
-    sub_lidar_raw_.shutdown();
-    sub_imu_raw_.shutdown();
-    sub_kinematic_raw_.shutdown();
-
-    // Wait a moment for any ongoing callbacks to complete
-    usleep(100000);
-
-    // Stop threads
-    if (lidar_thread_ && lidar_thread_->joinable()) {
-        lidar_thread_->join();
-        LOG(INFO) << "Lidar thread stopped";
-    }
-    if (imu_thread_ && imu_thread_->joinable()) {
-        imu_thread_->join();
-        LOG(INFO) << "IMU thread stopped";
-    }
-    if (kinematic_thread_ && kinematic_thread_->joinable()) {
-        kinematic_thread_->join();
-        LOG(INFO) << "Kinematic thread stopped";
-    }
+    sub_lidar_raw_.reset();
+    sub_imu_raw_.reset();
+    sub_kinematic_raw_.reset();
 }
 
 bool RosInterface::initParamAndReset(const std::string& config_file) {
@@ -123,60 +121,36 @@ void RosInterface::rosInit(const std::string& config_file) {
 }
 
 void RosInterface::subscribeLidar() {
-    this->lidar_thread_ = std::unique_ptr<std::thread>(new std::thread(&RosInterface::lidarLoop, this));
-    THREAD_SLEEP(100);
+    this->sub_lidar_raw_ =
+        node_->create_subscription<sensor_msgs::msg::PointCloud2>(
+            options::kLidarTopic,
+            rclcpp::SensorDataQoS(),
+            std::bind(&RosInterface::lidarCallBack, this, std::placeholders::_1));
 }
 
 void RosInterface::subscribeImu() {
-    this->imu_thread_ = std::unique_ptr<std::thread>(new std::thread(&RosInterface::imuLoop, this));
-    THREAD_SLEEP(100);
+    this->sub_imu_raw_ =
+        node_->create_subscription<sensor_msgs::msg::Imu>(
+            options::kImuTopic,
+            rclcpp::SensorDataQoS(),
+            std::bind(&RosInterface::imuCallBack, this, std::placeholders::_1));
 }
 
 void RosInterface::subscribeKinematicImu() {
-    this->kinematic_thread_ = std::unique_ptr<std::thread>(new std::thread(&RosInterface::kinematicImuLoop, this));
-    THREAD_SLEEP(100);
+    this->sub_kinematic_raw_ =
+        node_->create_subscription<unitree_legged_msgs::msg::HighState>(
+            options::kKinematicTopic,
+            rclcpp::SensorDataQoS(),
+            std::bind(&RosInterface::kinematicImuCallBack, this, std::placeholders::_1));
 }
 
-void RosInterface::lidarLoop() {
-    LOG(INFO) << "Lidar Loop Begin";
-
-    ros::NodeHandle nh(nh_, "lidar_sub");
-    ros::CallbackQueue queue;
-    nh.setCallbackQueue(&queue);
-    this->sub_lidar_raw_ =
-        nh.subscribe<sensor_msgs::PointCloud2>(options::kLidarTopic, 1000, &RosInterface::lidarCallBack, this);
-
-    while (ros::ok() && !options::FLAG_EXIT.load()) { queue.callAvailable(ros::WallDuration(0.2)); }
-}
-
-void RosInterface::imuLoop() {
-    LOG(INFO) << "IMU Loop Begin";
-
-    ros::NodeHandle nh(nh_, "imu_sub");
-    ros::CallbackQueue queue;
-    nh.setCallbackQueue(&queue);
-    this->sub_imu_raw_ = nh.subscribe(options::kImuTopic, 10000, &RosInterface::imuCallBack, this);
-
-    while (ros::ok() && !options::FLAG_EXIT.load()) { queue.callAvailable(ros::WallDuration(0.1)); }
-}
-
-void RosInterface::kinematicImuLoop() {
-    LOG(INFO) << "Kinematic Loop Begin";
-
-    ros::NodeHandle nh(nh_, "kinematic_sub");
-    ros::CallbackQueue queue;
-    nh.setCallbackQueue(&queue);
-    this->sub_kinematic_raw_ = nh.subscribe(options::kKinematicTopic, 10000, &RosInterface::kinematicImuCallBack, this);
-
-    while (ros::ok() && !options::FLAG_EXIT.load()) { queue.callAvailable(ros::WallDuration(0.1)); }
-}
-
-void RosInterface::lidarCallBack(const sensor_msgs::PointCloud2::ConstPtr& msg) {
+void RosInterface::lidarCallBack(const sensor_msgs::msg::PointCloud2::ConstSharedPtr& msg) {
     std::lock_guard<std::mutex> lock(mutex_);
-    static double last_scan_time = msg->header.stamp.toSec();
+    const double stamp_sec = stampToSec(msg->header.stamp);
+    static double last_scan_time = stamp_sec;
 
     Timer::measure("Lidar Processing", [&, this]() {
-        if (msg->header.stamp.toSec() < last_scan_time) {
+        if (stamp_sec < last_scan_time) {
             LOG(WARNING) << "Time inconsistency detected in Lidar data stream";
             lidar_cache_.clear();
         }
@@ -184,16 +158,16 @@ void RosInterface::lidarCallBack(const sensor_msgs::PointCloud2::ConstPtr& msg) 
         common::LidarScan lidar_scan;
         lidar_processing_->processing(msg, lidar_scan);
         lidar_cache_.push_back(lidar_scan);
-        last_scan_time = msg->header.stamp.toSec();
+        last_scan_time = stamp_sec;
     });
 
-    last_scan_time = msg->header.stamp.toSec();
+    last_scan_time = stamp_sec;
     return;
 }
 
-void RosInterface::imuCallBack(const sensor_msgs::Imu::ConstPtr& msg) {
-    static sensor_msgs::Imu last_imu_msg;
-    sensor_msgs::ImuPtr imu_msg(new sensor_msgs::Imu(*msg));
+void RosInterface::imuCallBack(const sensor_msgs::msg::Imu::ConstSharedPtr& msg) {
+    static sensor_msgs::msg::Imu last_imu_msg;
+    auto imu_msg = std::make_shared<sensor_msgs::msg::Imu>(*msg);
 
     if (options::kRedundancy) {
         if (imu_msg->linear_acceleration.z == last_imu_msg.linear_acceleration.z &&
@@ -203,7 +177,7 @@ void RosInterface::imuCallBack(const sensor_msgs::Imu::ConstPtr& msg) {
         }
     }
 
-    double timestamp = imu_msg->header.stamp.toSec();
+    double timestamp = stampToSec(imu_msg->header.stamp);
     {
         std::lock_guard<std::mutex> lock(mutex_);
         if (timestamp < last_timestamp_imu_) {
@@ -218,9 +192,9 @@ void RosInterface::imuCallBack(const sensor_msgs::Imu::ConstPtr& msg) {
     return;
 }
 
-void RosInterface::kinematicImuCallBack(const unitree_legged_msgs::HighState::ConstPtr& msg) {
-    static unitree_legged_msgs::HighState last_highstate_msg;
-    unitree_legged_msgs::HighStatePtr highstate_msg(new unitree_legged_msgs::HighState(*msg));
+void RosInterface::kinematicImuCallBack(const unitree_legged_msgs::msg::HighState::ConstSharedPtr& msg) {
+    static unitree_legged_msgs::msg::HighState last_highstate_msg;
+    auto highstate_msg = std::make_shared<unitree_legged_msgs::msg::HighState>(*msg);
 
     if (options::kRedundancy) {
         if (highstate_msg->imu.accelerometer[2] == last_highstate_msg.imu.accelerometer[2] &&
@@ -230,7 +204,7 @@ void RosInterface::kinematicImuCallBack(const unitree_legged_msgs::HighState::Co
         }
     }
 
-    double timestamp = highstate_msg->stamp.toSec();
+    double timestamp = stampToSec(highstate_msg->stamp);
     {
         std::lock_guard<std::mutex> lock(mutex_);
         if (timestamp < last_timestamp_kin_imu_) {
@@ -251,10 +225,10 @@ void RosInterface::kinematicImuCallBack(const unitree_legged_msgs::HighState::Co
         static std::vector<std::string> joint_names = {
             "FL_hip_joint", "FL_thigh_joint", "FL_calf_joint", "FR_hip_joint", "FR_thigh_joint", "FR_calf_joint",
             "RL_hip_joint", "RL_thigh_joint", "RL_calf_joint", "RR_hip_joint", "RR_thigh_joint", "RR_calf_joint"};
-        sensor_msgs::JointState joint_state;
+        sensor_msgs::msg::JointState joint_state;
         joint_state.header.stamp = last_highstate_msg.stamp;
         joint_state.name = joint_names;
-        const auto& motor = last_highstate_msg.motorState;
+        const auto& motor = last_highstate_msg.motor_state;
         joint_state.position = {
             motor[0].q, motor[1].q, motor[2].q, motor[3].q, motor[4].q,  motor[5].q,
             motor[6].q, motor[7].q, motor[8].q, motor[9].q, motor[10].q, motor[11].q,
@@ -263,7 +237,7 @@ void RosInterface::kinematicImuCallBack(const unitree_legged_msgs::HighState::Co
             motor[0].dq, motor[1].dq, motor[2].dq, motor[3].dq, motor[4].dq,  motor[5].dq,
             motor[6].dq, motor[7].dq, motor[8].dq, motor[9].dq, motor[10].dq, motor[11].dq,
         };
-        pub_joint_state_.publish(joint_state);
+        pub_joint_state_->publish(joint_state);
     }
     return;
 }
@@ -285,10 +259,10 @@ bool RosInterface::syncPackage() {
 
         if (last_timestamp_imu_ < lidar_end_time_) { return false; }
 
-        double imu_time = imu_cache_.front()->header.stamp.toSec();
+        double imu_time = stampToSec(imu_cache_.front()->header.stamp);
         measure_.imus_.clear();
         while ((!imu_cache_.empty()) && (imu_time < lidar_end_time_)) {
-            imu_time = imu_cache_.front()->header.stamp.toSec();
+            imu_time = stampToSec(imu_cache_.front()->header.stamp);
             if (imu_time > lidar_end_time_) break;
             measure_.imus_.push_back(imu_cache_.front());
             imu_cache_.pop_front();
@@ -333,7 +307,7 @@ bool RosInterface::syncPackage() {
 
 void RosInterface::publishOdomTFPath(double end_time) {
     // odometry
-    odom_world_.header.stamp = ros::Time().fromSec(end_time);
+    odom_world_.header.stamp = secToStamp(end_time);
     odom_world_.pose.pose.position.x = kilo_->getPos()(0);
     odom_world_.pose.pose.position.y = kilo_->getPos()(1);
     odom_world_.pose.pose.position.z = kilo_->getPos()(2);
@@ -342,31 +316,29 @@ void RosInterface::publishOdomTFPath(double end_time) {
     odom_world_.pose.pose.orientation.x = q_eigen_.x();
     odom_world_.pose.pose.orientation.y = q_eigen_.y();
     odom_world_.pose.pose.orientation.z = q_eigen_.z();
-    pub_odom_world_.publish(odom_world_);
+    pub_odom_world_->publish(odom_world_);
 
     // tf
-    transform_.setOrigin(tf::Vector3(odom_world_.pose.pose.position.x, odom_world_.pose.pose.position.y,
-                                     odom_world_.pose.pose.position.z));
-    q_tf_.setW(odom_world_.pose.pose.orientation.w);
-    q_tf_.setX(odom_world_.pose.pose.orientation.x);
-    q_tf_.setY(odom_world_.pose.pose.orientation.y);
-    q_tf_.setZ(odom_world_.pose.pose.orientation.z);
-    transform_.setRotation(q_tf_);
-    br_.sendTransform(tf::StampedTransform(transform_, odom_world_.header.stamp, "camera_init", "base"));
+    tf_msg_.header.stamp = odom_world_.header.stamp;
+    tf_msg_.transform.translation.x = odom_world_.pose.pose.position.x;
+    tf_msg_.transform.translation.y = odom_world_.pose.pose.position.y;
+    tf_msg_.transform.translation.z = odom_world_.pose.pose.position.z;
+    tf_msg_.transform.rotation = odom_world_.pose.pose.orientation;
+    if (tf_broadcaster_) { tf_broadcaster_->sendTransform(tf_msg_); }
 
     // path
     pose_path_.header.stamp = odom_world_.header.stamp;
     pose_path_.pose = odom_world_.pose.pose;
     path_world_.poses.push_back(pose_path_);
-    pub_path_.publish(path_world_);
+    pub_path_->publish(path_world_);
 }
 
 void RosInterface::publishPointcloudWorld(double end_time) {
-    sensor_msgs::PointCloud2 pcl_msg;
+    sensor_msgs::msg::PointCloud2 pcl_msg;
     pcl::toROSMsg(*cloud_down_world_, pcl_msg);
-    pcl_msg.header.stamp = ros::Time().fromSec(end_time);
+    pcl_msg.header.stamp = secToStamp(end_time);
     pcl_msg.header.frame_id = "camera_init";
-    pub_pointcloud_world_.publish(pcl_msg);
+    pub_pointcloud_world_->publish(pcl_msg);
 }
 
 void RosInterface::runReset() {

@@ -1,25 +1,22 @@
-
 uint8[2] head
-uint8 levelFlag
-uint8 frameReserve
-
-uint32[2] SN
+uint8 level_flag
+uint8 frame_reserve
+uint32[2] sn
 uint32[2] version
-uint16 bandWidth
-IMU imu
-MotorState[20] motorState
-BmsState bms
-int16[4] footForce	
-int16[4] footForceEst	
-uint32 tick						
-uint8[40] wirelessRemote 
+uint16 bandwidth
+IMUState imu_state
+MotorState[20] motor_state
+BmsState bms_state
+int16[4] foot_force
+int16[4] foot_force_est
+uint32 tick
+uint8[40] wireless_remote
+uint8 bit_flag
+float32 adc_reel
+int8 temperature_ntc1
+int8 temperature_ntc2
+float32 power_v
+float32 power_a
+uint16[4] fan_frequency
 uint32 reserve
 uint32 crc
-
-# Old version Aliengo does not have:
-Cartesian[4] eeForceRaw
-Cartesian[4] eeForce          #it's a 1-DOF force infact, but we use 3-DOF here just for visualization 
-Cartesian position            # will delete
-Cartesian velocity            # will delete
-Cartesian velocity_w            # will delete
-

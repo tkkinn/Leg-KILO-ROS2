@@ -17,6 +17,9 @@ namespace legkilo {
 
 namespace {
 inline bool time_list(PointType& x, PointType& y) { return (x.curvature < y.curvature); }
+inline double stampToSec(const builtin_interfaces::msg::Time& stamp) {
+    return static_cast<double>(stamp.sec) + 1e-9 * static_cast<double>(stamp.nanosec);
+}
 }  // namespace
 
 KILO::KILO(const std::string& config_file) { initializeFromYaml(config_file); }
@@ -232,8 +235,8 @@ bool KILO::predictUpdatePoint(double current_time, size_t idx_i, size_t idx_j, c
     return effect_num > 0;
 }
 
-bool KILO::predictUpdateImu(const sensor_msgs::ImuPtr& imu) {
-    double current_time = imu->header.stamp.toSec();
+bool KILO::predictUpdateImu(const sensor_msgs::msg::Imu::SharedPtr& imu) {
+    double current_time = stampToSec(imu->header.stamp);
     double dt_cov = current_time - last_state_update_time_;
     eskf_->predict(dt_cov, false, true);
     double dt = current_time - last_state_predict_time_;
@@ -378,7 +381,7 @@ bool KILO::process(common::MeasGroup measure, CloudPtr& cloud_down_body_out, Clo
             while (idx_j < pts_size && pts[idx_i].curvature == pts[idx_j].curvature) { idx_j++; }
 
             if (imu_mode_only_) {
-                while (!imus.empty() && imus.front()->header.stamp.toSec() < cur_point_time) {
+                while (!imus.empty() && stampToSec(imus.front()->header.stamp) < cur_point_time) {
                     this->predictUpdateImu(imus.front());
                     imus.pop_front();
                 }

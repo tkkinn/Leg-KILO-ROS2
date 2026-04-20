@@ -45,10 +45,10 @@ Leg-KILO 2.0 is a kinematic–inertial–LiDAR tightly‑coupled error‑state K
 
 Does not include any external optimization libraries; only requires common SLAM libraries such as Eigen and PCL.
 
-Currently our code is tested on 
+Currently our ROS2 code is tested on
 
-- Ubuntu 18.04
-- ROS melodic
+- Ubuntu 22.04
+- ROS2 humble
 - pcl 1.8
 - eigen 3
 - [unitree_legged_msgs](https://github.com/unitreerobotics/unitree_ros_to_real) (has included in the project)
@@ -65,7 +65,8 @@ sudo apt update && sudo apt install -y libpcl-dev libeigen3-dev libgoogle-glog-d
 cd ~/legkilo_ws/src
 git clone https://github.com/ouguangjun/Leg-KILO.git
 cd ..
-catkin build  # catkin_make
+source /opt/ros/humble/setup.bash
+colcon build --packages-select unitree_legged_msgs legkilo --symlink-install
 ```
 
 # Run
@@ -74,9 +75,9 @@ catkin build  # catkin_make
 Download our dataset from [link](https://github.com/ouguangjun/legkilo-dataset)
 
 ```bash
-source devel/setup.bash
-roslaunch legkilo leg_fusion.launch
-rosbag play xxxx.bag
+source install/setup.bash
+ros2 launch legkilo leg_fusion.launch.py
+ros2 bag play xxxx
 ```
 
 ## Diter++ Dataset
@@ -84,16 +85,16 @@ rosbag play xxxx.bag
 Download [Diter++](https://www.google.com/url?q=https%3A%2F%2Fconstruction-robots.github.io%2Fpapers%2F66.pdf&sa=D&sntz=1&usg=AOvVaw2WSdHVs-7_zznSH2CZIeWH) dataset from [link](https://sites.google.com/view/diter-plusplus/home)
 
 ```bash
-source devel/setup.bash
-roslaunch legkilo diter.launch
-rosbag play lawn_go2_lower_day.bag
+source install/setup.bash
+ros2 launch legkilo diter.launch.py
+ros2 bag play lawn_go2_lower_day
 ```
 
 ## NCLT Dataset
 ```bash
-source devel/setup.bash
-roslaunch legkilo nclt.launch
-rosbag play xxxx.bag
+source install/setup.bash
+ros2 launch legkilo nclt.launch.py
+ros2 bag play xxxx
 ```
 
 

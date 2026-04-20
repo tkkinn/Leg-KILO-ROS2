@@ -6,6 +6,7 @@
 
 #include <glog/logging.h>
 #include <pcl_conversions/pcl_conversions.h>
+#include <sensor_msgs/msg/point_cloud2.hpp>
 
 namespace velodyne_ros {
 struct EIGEN_ALIGN16 Point {
@@ -90,7 +91,7 @@ class LidarProcessing {
     ~LidarProcessing();
 
     common::LidarType getLidarType() const;
-    void processing(const sensor_msgs::PointCloud2::ConstPtr& msg, common::LidarScan& lidar_scan);
+    void processing(const sensor_msgs::msg::PointCloud2::ConstSharedPtr& msg, common::LidarScan& lidar_scan);
 
     template <typename T>
     inline bool blindCheck(const T& p) {
@@ -98,9 +99,9 @@ class LidarProcessing {
     }
 
    private:
-    void velodyneHandler(const sensor_msgs::PointCloud2::ConstPtr& msg, common::LidarScan& lidar_scan);
-    void ousterHander(const sensor_msgs::PointCloud2::ConstPtr& msg, common::LidarScan& lidar_scan);
-    void hesaiHandler(const sensor_msgs::PointCloud2::ConstPtr& msg, common::LidarScan& lidar_scan);
+    void velodyneHandler(const sensor_msgs::msg::PointCloud2::ConstSharedPtr& msg, common::LidarScan& lidar_scan);
+    void ousterHander(const sensor_msgs::msg::PointCloud2::ConstSharedPtr& msg, common::LidarScan& lidar_scan);
+    void hesaiHandler(const sensor_msgs::msg::PointCloud2::ConstSharedPtr& msg, common::LidarScan& lidar_scan);
     CloudPtr cloud_pcl_;
     Config config_;
 };
