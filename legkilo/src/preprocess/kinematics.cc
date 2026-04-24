@@ -2,40 +2,35 @@
 
 namespace legkilo {
 
-namespace {
-inline double stampToSec(const builtin_interfaces::msg::Time& stamp) {
-    return static_cast<double>(stamp.sec) + 1e-9 * static_cast<double>(stamp.nanosec);
-}
-}  // namespace
-
-void Kinematics::processing(const unitree_legged_msgs::msg::HighState& high_state, common::KinImuMeas& kin_imu_meas) {
-    kin_imu_meas.time_stamp_ = stampToSec(high_state.stamp);
+void Kinematics::processing(const unitree_go::msg::LowState& low_state, common::KinImuMeas& kin_imu_meas) {
+    // Unitree LowState tick is in milliseconds since boot.
+    kin_imu_meas.time_stamp_ = static_cast<double>(low_state.tick) * 1e-3;
 
     for (int i = 0; i < 3; ++i) {
-        kin_imu_meas.acc_[i] = high_state.imu.accelerometer[i];
-        kin_imu_meas.gyr_[i] = high_state.imu.gyroscope[i];
+        kin_imu_meas.acc_[i] = low_state.imu_state.accelerometer[i];
+        kin_imu_meas.gyr_[i] = low_state.imu_state.gyroscope[i];
     }
 
     /*  4 legs, 3 moters
         this project leg order: FR FL RR RL
         unitree leg order: FL FR RL RR
     */
-    kin_imu_meas.contact_[0] = contacts_[0].update(high_state.foot_force[1]);
-    kin_imu_meas.contact_[1] = contacts_[1].update(high_state.foot_force[0]);
-    kin_imu_meas.contact_[2] = contacts_[2].update(high_state.foot_force[3]);
-    kin_imu_meas.contact_[3] = contacts_[3].update(high_state.foot_force[2]);
+    kin_imu_meas.contact_[0] = contacts_[0].update(low_state.foot_force[1]);
+    kin_imu_meas.contact_[1] = contacts_[1].update(low_state.foot_force[0]);
+    kin_imu_meas.contact_[2] = contacts_[2].update(low_state.foot_force[3]);
+    kin_imu_meas.contact_[3] = contacts_[3].update(low_state.foot_force[2]);
 
     double foot_angle[4][3];
     double foot_angle_vel[4][3];
     for (int i = 0; i < 3; ++i) {
-        foot_angle[0][i] = high_state.motor_state[3 + i].q;
-        foot_angle_vel[0][i] = high_state.motor_state[3 + i].dq;
-        foot_angle[1][i] = high_state.motor_state[0 + i].q;
-        foot_angle_vel[1][i] = high_state.motor_state[0 + i].dq;
-        foot_angle[2][i] = high_state.motor_state[9 + i].q;
-        foot_angle_vel[2][i] = high_state.motor_state[9 + i].dq;
-        foot_angle[3][i] = high_state.motor_state[6 + i].q;
-        foot_angle_vel[3][i] = high_state.motor_state[6 + i].dq;
+        foot_angle[0][i] = low_state.motor_state[3 + i].q;
+        foot_angle_vel[0][i] = low_state.motor_state[3 + i].dq;
+        foot_angle[1][i] = low_state.motor_state[0 + i].q;
+        foot_angle_vel[1][i] = low_state.motor_state[0 + i].dq;
+        foot_angle[2][i] = low_state.motor_state[9 + i].q;
+        foot_angle_vel[2][i] = low_state.motor_state[9 + i].dq;
+        foot_angle[3][i] = low_state.motor_state[6 + i].q;
+        foot_angle_vel[3][i] = low_state.motor_state[6 + i].dq;
     }
 
     this->caculateFootPosVel(foot_angle, foot_angle_vel, kin_imu_meas.foot_pos_, kin_imu_meas.foot_vel_);

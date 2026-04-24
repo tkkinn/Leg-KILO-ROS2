@@ -15,6 +15,7 @@
 
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <geometry_msgs/msg/transform_stamped.hpp>
+#include <livox_interfaces/msg/custom_msg.hpp>
 #include <nav_msgs/msg/odometry.hpp>
 #include <nav_msgs/msg/path.hpp>
 #include <rclcpp/rclcpp.hpp>
@@ -22,7 +23,7 @@
 #include <sensor_msgs/msg/joint_state.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
 #include <tf2_ros/transform_broadcaster.h>
-#include <unitree_legged_msgs/msg/high_state.hpp>
+#include <unitree_go/msg/low_state.hpp>
 
 namespace legkilo {
 class Kinematics;
@@ -49,8 +50,9 @@ class RosInterface {
     void subscribeKinematicImu();
     void subscribeImu();
     void lidarCallBack(const sensor_msgs::msg::PointCloud2::ConstSharedPtr& msg);
+    void lidarCallBack(const livox_interfaces::msg::CustomMsg::ConstSharedPtr& msg);
     void imuCallBack(const sensor_msgs::msg::Imu::ConstSharedPtr& msg);
-    void kinematicImuCallBack(const unitree_legged_msgs::msg::HighState::ConstSharedPtr& msg);
+    void kinematicImuCallBack(const unitree_go::msg::LowState::ConstSharedPtr& msg);
     bool syncPackage();
     void runReset();
     void publishOdomTFPath(double end_time);
@@ -61,8 +63,9 @@ class RosInterface {
 
     // subscriber
     rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr sub_lidar_raw_;
+    rclcpp::Subscription<livox_interfaces::msg::CustomMsg>::SharedPtr sub_lidar_livox_;
     rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr sub_imu_raw_;
-    rclcpp::Subscription<unitree_legged_msgs::msg::HighState>::SharedPtr sub_kinematic_raw_;
+    rclcpp::Subscription<unitree_go::msg::LowState>::SharedPtr sub_kinematic_raw_;
 
     // publisher
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub_pointcloud_body_;
@@ -93,9 +96,17 @@ class RosInterface {
 
     // sync package
     std::mutex mutex_;
-    double last_timestamp_imu_;
-    double last_timestamp_kin_imu_;
-    double lidar_end_time_;
+    double last_timestamp_lidar_ = 0.0;
+    double last_timestamp_imu_ = -1.0;
+    double last_timestamp_kin_imu_ = -1.0;
+    double lidar_end_time_ = 0.0;
+    bool lidar_pushed_ = false;
+
+    // FAST-LIO style software time sync
+    bool time_sync_en_ = false;
+    bool timediff_set_flg_ = false;
+    double time_diff_lidar_to_imu_ = 0.0;
+    double timediff_lidar_wrt_imu_ = 0.0;
 
     // initialization
     double init_time_ = 0.1;

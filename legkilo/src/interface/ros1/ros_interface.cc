@@ -57,6 +57,7 @@ RosInterface::RosInterface(rclcpp::Node::SharedPtr node) : node_(std::move(node)
 RosInterface::~RosInterface() {
     LOG(INFO) << "Ros Interface is being Destructed";
     sub_lidar_raw_.reset();
+    sub_lidar_livox_.reset();
     sub_imu_raw_.reset();
     sub_kinematic_raw_.reset();
 }
@@ -69,8 +70,20 @@ bool RosInterface::initParamAndReset(const std::string& config_file) {
     options::kImuUse = yaml_helper.get<bool>("only_imu_use", true);
     options::kKinAndImuUse = static_cast<bool>(!options::kImuUse);
     options::kRedundancy = yaml_helper.get<bool>("redundancy", false);
+    time_sync_en_ = yaml_helper.get<bool>("time_sync_en", false);
+    time_diff_lidar_to_imu_ = yaml_helper.get<double>("time_offset_lidar_to_imu", 0.0);
     if (options::kImuUse) { options::kImuTopic = yaml_helper.get<std::string>("imu_topic"); }
     if (options::kKinAndImuUse) { options::kKinematicTopic = yaml_helper.get<std::string>("kinematic_topic"); }
+
+    timediff_set_flg_ = false;
+    timediff_lidar_wrt_imu_ = 0.0;
+    last_timestamp_lidar_ = 0.0;
+    last_timestamp_imu_ = -1.0;
+    last_timestamp_kin_imu_ = -1.0;
+    lidar_pushed_ = false;
+    lidar_cache_.clear();
+    imu_cache_.clear();
+    kin_imu_cache_.clear();
 
     /* Odometry core (KILO) */
     kilo_ = std::make_unique<KILO>(config_file);
@@ -121,11 +134,21 @@ void RosInterface::rosInit(const std::string& config_file) {
 }
 
 void RosInterface::subscribeLidar() {
+    if (lidar_processing_->getLidarType() == common::LidarType::LIVOX) {
+        auto livox_qos = rclcpp::QoS(1000).best_effort();
+        this->sub_lidar_livox_ =
+            node_->create_subscription<livox_interfaces::msg::CustomMsg>(
+                options::kLidarTopic,
+                livox_qos,
+                [this](const livox_interfaces::msg::CustomMsg::ConstSharedPtr& msg) { this->lidarCallBack(msg); });
+        return;
+    }
+
     this->sub_lidar_raw_ =
         node_->create_subscription<sensor_msgs::msg::PointCloud2>(
             options::kLidarTopic,
             rclcpp::SensorDataQoS(),
-            std::bind(&RosInterface::lidarCallBack, this, std::placeholders::_1));
+            [this](const sensor_msgs::msg::PointCloud2::ConstSharedPtr& msg) { this->lidarCallBack(msg); });
 }
 
 void RosInterface::subscribeImu() {
@@ -137,31 +160,133 @@ void RosInterface::subscribeImu() {
 }
 
 void RosInterface::subscribeKinematicImu() {
+    auto be_qos = rclcpp::QoS(1000).best_effort();
     this->sub_kinematic_raw_ =
-        node_->create_subscription<unitree_legged_msgs::msg::HighState>(
+        node_->create_subscription<unitree_go::msg::LowState>(
             options::kKinematicTopic,
-            rclcpp::SensorDataQoS(),
+            be_qos,
             std::bind(&RosInterface::kinematicImuCallBack, this, std::placeholders::_1));
 }
 
 void RosInterface::lidarCallBack(const sensor_msgs::msg::PointCloud2::ConstSharedPtr& msg) {
     std::lock_guard<std::mutex> lock(mutex_);
     const double stamp_sec = stampToSec(msg->header.stamp);
-    static double last_scan_time = stamp_sec;
 
     Timer::measure("Lidar Processing", [&, this]() {
-        if (stamp_sec < last_scan_time) {
+        if (last_timestamp_lidar_ > 0.0 && stamp_sec < last_timestamp_lidar_) {
             LOG(WARNING) << "Time inconsistency detected in Lidar data stream";
             lidar_cache_.clear();
+            lidar_pushed_ = false;
         }
 
         common::LidarScan lidar_scan;
         lidar_processing_->processing(msg, lidar_scan);
         lidar_cache_.push_back(lidar_scan);
-        last_scan_time = stamp_sec;
+
+        last_timestamp_lidar_ = stamp_sec;
+
+        if (options::kImuUse) {
+            if (!time_sync_en_ && std::abs(last_timestamp_imu_ - last_timestamp_lidar_) > 10.0 &&
+                !imu_cache_.empty() && !lidar_cache_.empty()) {
+                LOG(WARNING) << "IMU and LiDAR not synced, IMU time: " << last_timestamp_imu_
+                             << ", LiDAR header time: " << last_timestamp_lidar_;
+            }
+
+            if (time_sync_en_ && !timediff_set_flg_ && std::abs(last_timestamp_lidar_ - last_timestamp_imu_) > 1.0 &&
+                !imu_cache_.empty()) {
+                timediff_set_flg_ = true;
+                timediff_lidar_wrt_imu_ = last_timestamp_lidar_ + 0.1 - last_timestamp_imu_;
+                LOG(INFO) << "Self sync IMU and LiDAR, time diff is " << std::setprecision(10)
+                          << timediff_lidar_wrt_imu_;
+                imu_cache_.clear();
+                lidar_cache_.clear();
+                lidar_pushed_ = false;
+                last_timestamp_imu_ = -1.0;
+            }
+        }
+
+        if (options::kKinAndImuUse) {
+            if (!time_sync_en_ && std::abs(last_timestamp_kin_imu_ - last_timestamp_lidar_) > 10.0 &&
+                !kin_imu_cache_.empty() && !lidar_cache_.empty()) {
+                LOG(WARNING) << "IMU and LiDAR not synced, IMU time: " << last_timestamp_kin_imu_
+                             << ", LiDAR header time: " << last_timestamp_lidar_;
+            }
+
+            if (time_sync_en_ && !timediff_set_flg_ &&
+                std::abs(last_timestamp_lidar_ - last_timestamp_kin_imu_) > 1.0 && !kin_imu_cache_.empty()) {
+                timediff_set_flg_ = true;
+                timediff_lidar_wrt_imu_ = last_timestamp_lidar_ + 0.1 - last_timestamp_kin_imu_;
+                LOG(INFO) << "Self sync IMU and LiDAR, time diff is " << std::setprecision(10)
+                          << timediff_lidar_wrt_imu_;
+                kin_imu_cache_.clear();
+                lidar_cache_.clear();
+                lidar_pushed_ = false;
+                last_timestamp_kin_imu_ = -1.0;
+            }
+        }
     });
 
-    last_scan_time = stamp_sec;
+    return;
+}
+
+void RosInterface::lidarCallBack(const livox_interfaces::msg::CustomMsg::ConstSharedPtr& msg) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    const double stamp_sec = stampToSec(msg->header.stamp);
+
+    Timer::measure("Lidar Processing", [&, this]() {
+        if (last_timestamp_lidar_ > 0.0 && stamp_sec < last_timestamp_lidar_) {
+            LOG(WARNING) << "Time inconsistency detected in Lidar data stream";
+            lidar_cache_.clear();
+            lidar_pushed_ = false;
+        }
+
+        common::LidarScan lidar_scan;
+        lidar_processing_->processing(msg, lidar_scan);
+        lidar_cache_.push_back(lidar_scan);
+
+        last_timestamp_lidar_ = stamp_sec;
+
+        if (options::kImuUse) {
+            if (!time_sync_en_ && std::abs(last_timestamp_imu_ - last_timestamp_lidar_) > 10.0 &&
+                !imu_cache_.empty() && !lidar_cache_.empty()) {
+                LOG(WARNING) << "IMU and LiDAR not synced, IMU time: " << last_timestamp_imu_
+                             << ", LiDAR header time: " << last_timestamp_lidar_;
+            }
+
+            if (time_sync_en_ && !timediff_set_flg_ && std::abs(last_timestamp_lidar_ - last_timestamp_imu_) > 1.0 &&
+                !imu_cache_.empty()) {
+                timediff_set_flg_ = true;
+                timediff_lidar_wrt_imu_ = last_timestamp_lidar_ + 0.1 - last_timestamp_imu_;
+                LOG(INFO) << "Self sync IMU and LiDAR, time diff is " << std::setprecision(10)
+                          << timediff_lidar_wrt_imu_;
+                imu_cache_.clear();
+                lidar_cache_.clear();
+                lidar_pushed_ = false;
+                last_timestamp_imu_ = -1.0;
+            }
+        }
+
+        if (options::kKinAndImuUse) {
+            if (!time_sync_en_ && std::abs(last_timestamp_kin_imu_ - last_timestamp_lidar_) > 10.0 &&
+                !kin_imu_cache_.empty() && !lidar_cache_.empty()) {
+                LOG(WARNING) << "IMU and LiDAR not synced, IMU time: " << last_timestamp_kin_imu_
+                             << ", LiDAR header time: " << last_timestamp_lidar_;
+            }
+
+            if (time_sync_en_ && !timediff_set_flg_ &&
+                std::abs(last_timestamp_lidar_ - last_timestamp_kin_imu_) > 1.0 && !kin_imu_cache_.empty()) {
+                timediff_set_flg_ = true;
+                timediff_lidar_wrt_imu_ = last_timestamp_lidar_ + 0.1 - last_timestamp_kin_imu_;
+                LOG(INFO) << "Self sync IMU and LiDAR, time diff is " << std::setprecision(10)
+                          << timediff_lidar_wrt_imu_;
+                kin_imu_cache_.clear();
+                lidar_cache_.clear();
+                lidar_pushed_ = false;
+                last_timestamp_kin_imu_ = -1.0;
+            }
+        }
+    });
+
     return;
 }
 
@@ -177,7 +302,10 @@ void RosInterface::imuCallBack(const sensor_msgs::msg::Imu::ConstSharedPtr& msg)
         }
     }
 
-    double timestamp = stampToSec(imu_msg->header.stamp);
+    double timestamp = stampToSec(imu_msg->header.stamp) - time_diff_lidar_to_imu_;
+    if (std::abs(timediff_lidar_wrt_imu_) > 0.1 && time_sync_en_) { timestamp += timediff_lidar_wrt_imu_; }
+    imu_msg->header.stamp = secToStamp(timestamp);
+
     {
         std::lock_guard<std::mutex> lock(mutex_);
         if (timestamp < last_timestamp_imu_) {
@@ -192,19 +320,21 @@ void RosInterface::imuCallBack(const sensor_msgs::msg::Imu::ConstSharedPtr& msg)
     return;
 }
 
-void RosInterface::kinematicImuCallBack(const unitree_legged_msgs::msg::HighState::ConstSharedPtr& msg) {
-    static unitree_legged_msgs::msg::HighState last_highstate_msg;
-    auto highstate_msg = std::make_shared<unitree_legged_msgs::msg::HighState>(*msg);
+void RosInterface::kinematicImuCallBack(const unitree_go::msg::LowState::ConstSharedPtr& msg) {
+    static unitree_go::msg::LowState last_lowstate_msg;
+    auto lowstate_msg = std::make_shared<unitree_go::msg::LowState>(*msg);
 
     if (options::kRedundancy) {
-        if (highstate_msg->imu.accelerometer[2] == last_highstate_msg.imu.accelerometer[2] &&
-            highstate_msg->imu.gyroscope[2] == last_highstate_msg.imu.gyroscope[2]) {
-            last_highstate_msg = *highstate_msg;
+        if (lowstate_msg->imu_state.accelerometer[2] == last_lowstate_msg.imu_state.accelerometer[2] &&
+            lowstate_msg->imu_state.gyroscope[2] == last_lowstate_msg.imu_state.gyroscope[2]) {
+            last_lowstate_msg = *lowstate_msg;
             return;
         }
     }
 
-    double timestamp = stampToSec(highstate_msg->stamp);
+    double timestamp = static_cast<double>(lowstate_msg->tick) * 1e-3 - time_diff_lidar_to_imu_;
+    if (std::abs(timediff_lidar_wrt_imu_) > 0.1 && time_sync_en_) { timestamp += timediff_lidar_wrt_imu_; }
+
     {
         std::lock_guard<std::mutex> lock(mutex_);
         if (timestamp < last_timestamp_kin_imu_) {
@@ -214,11 +344,12 @@ void RosInterface::kinematicImuCallBack(const unitree_legged_msgs::msg::HighStat
 
         common::KinImuMeas kin_imu_meas;
 
-        kinematics_->processing(*highstate_msg, kin_imu_meas);
+        kinematics_->processing(*lowstate_msg, kin_imu_meas);
+        kin_imu_meas.time_stamp_ = timestamp;
 
         kin_imu_cache_.push_back(kin_imu_meas);
         last_timestamp_kin_imu_ = timestamp;
-        last_highstate_msg = *highstate_msg;
+        last_lowstate_msg = *lowstate_msg;
     }
 
     if (pub_joint_tf_enable_) {
@@ -226,9 +357,9 @@ void RosInterface::kinematicImuCallBack(const unitree_legged_msgs::msg::HighStat
             "FL_hip_joint", "FL_thigh_joint", "FL_calf_joint", "FR_hip_joint", "FR_thigh_joint", "FR_calf_joint",
             "RL_hip_joint", "RL_thigh_joint", "RL_calf_joint", "RR_hip_joint", "RR_thigh_joint", "RR_calf_joint"};
         sensor_msgs::msg::JointState joint_state;
-        joint_state.header.stamp = last_highstate_msg.stamp;
+        joint_state.header.stamp = secToStamp(timestamp);
         joint_state.name = joint_names;
-        const auto& motor = last_highstate_msg.motor_state;
+        const auto& motor = lowstate_msg->motor_state;
         joint_state.position = {
             motor[0].q, motor[1].q, motor[2].q, motor[3].q, motor[4].q,  motor[5].q,
             motor[6].q, motor[7].q, motor[8].q, motor[9].q, motor[10].q, motor[11].q,
@@ -243,18 +374,16 @@ void RosInterface::kinematicImuCallBack(const unitree_legged_msgs::msg::HighStat
 }
 
 bool RosInterface::syncPackage() {
-    static bool lidar_push_ = false;
-
     std::lock_guard<std::mutex> lk(mutex_);
 
     // pack lidar and  imu
     if (options::kImuUse) {
         if (lidar_cache_.empty() || imu_cache_.empty()) return false;
 
-        if (!lidar_push_) {
+        if (!lidar_pushed_) {
             measure_.lidar_scan_ = lidar_cache_.front();
             lidar_end_time_ = measure_.lidar_scan_.lidar_end_time_;
-            lidar_push_ = true;
+            lidar_pushed_ = true;
         }
 
         if (last_timestamp_imu_ < lidar_end_time_) { return false; }
@@ -269,7 +398,7 @@ bool RosInterface::syncPackage() {
         }
 
         lidar_cache_.pop_front();
-        lidar_push_ = false;
+        lidar_pushed_ = false;
 
         return true;
     }
@@ -278,10 +407,10 @@ bool RosInterface::syncPackage() {
     if (options::kKinAndImuUse) {
         if (lidar_cache_.empty() || kin_imu_cache_.empty()) return false;
 
-        if (!lidar_push_) {
+        if (!lidar_pushed_) {
             measure_.lidar_scan_ = lidar_cache_.front();
             lidar_end_time_ = measure_.lidar_scan_.lidar_end_time_;
-            lidar_push_ = true;
+            lidar_pushed_ = true;
         }
 
         if (last_timestamp_kin_imu_ < lidar_end_time_) { return false; }
@@ -296,7 +425,7 @@ bool RosInterface::syncPackage() {
         }
 
         lidar_cache_.pop_front();
-        lidar_push_ = false;
+        lidar_pushed_ = false;
 
         return true;
     }

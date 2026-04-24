@@ -6,7 +6,7 @@ kinematic_topic: /agent1/high_state
 
 # KI Options
 only_imu_use: false # True: use IMU from <sensor_msgs::Imu>, without kinematics
-                                          # False: use IMU and Kin. from <unitree_legged_msgs/HighState>
+                                          # False: use IMU and Kin. from <unitree_go/LowState>
 redundancy: true # set true for legkilo dataset 
                                      # (imu/kin publish freq is 500 hz but update freq is only 50 hz )
 
@@ -19,7 +19,7 @@ extrinsic_T: [0.005, 0.00056, 0.299]
 extrinsic_R: [1, 0, 0, 0, 1, 0, 0, 0, 1]
 
 # Lidar Common
-lidar_type: 2   # Velodyne: 1 Ouster: 2
+lidar_type: 2   # Velodyne: 1 Ouster: 2 Hesai: 3 Livox CustomMsg: 4
 time_scale: 1e-9 # point sampling time scale relative to [sec]
 blind: 1.5
 filter_num: 3

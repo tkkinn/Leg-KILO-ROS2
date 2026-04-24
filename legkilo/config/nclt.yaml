@@ -6,7 +6,7 @@ kinematic_topic: /high_state
 
 # KI Options
 only_imu_use: true # True: use IMU from <sensor_msgs::Imu>, without kinematics
-                                          # False: use IMU and Kin. from <unitree_legged_msgs/HighState>
+                                          # False: use IMU and Kin. from <unitree_go/LowState>
 redundancy: true # set true for legkilo dataset 
                                      # (imu/kin publish freq is 500 hz but update freq is only 50 hz )
 

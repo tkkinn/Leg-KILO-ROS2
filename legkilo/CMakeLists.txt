@@ -33,6 +33,8 @@ find_package(visualization_msgs REQUIRED)
 find_package(tf2 REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(pcl_conversions REQUIRED)
+find_package(livox_interfaces REQUIRED)
+find_package(unitree_go REQUIRED)
 find_package(unitree_legged_msgs REQUIRED)
 find_package(Eigen3 REQUIRED)
 find_package(PCL 1.8 REQUIRED)
@@ -70,6 +72,8 @@ ament_target_dependencies(${PROJECT_NAME}
     tf2
     tf2_ros
     pcl_conversions
+    livox_interfaces
+    unitree_go
     unitree_legged_msgs
 )
 target_link_libraries(${PROJECT_NAME}

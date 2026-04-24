@@ -25,8 +25,21 @@ void LidarProcessing::processing(const sensor_msgs::msg::PointCloud2::ConstShare
 
         case common::LidarType::HESAI: hesaiHandler(msg, lidar_scan); break;
 
+        case common::LidarType::LIVOX:
+            LOG(ERROR) << "LIVOX lidar type expects livox_interfaces::msg::CustomMsg";
+            break;
+
         default: LOG(ERROR) << " Lidar Type is Not Currently Available"; break;
     }
+}
+
+void LidarProcessing::processing(const livox_interfaces::msg::CustomMsg::ConstSharedPtr& msg,
+                                 common::LidarScan& lidar_scan) {
+    if (config_.lidar_type_ != common::LidarType::LIVOX) {
+        LOG(WARNING) << "Received Livox CustomMsg while lidar_type is set to " << static_cast<int>(config_.lidar_type_)
+                     << ". Processing it as LIVOX.";
+    }
+    livoxHandler(msg, lidar_scan);
 }
 
 void LidarProcessing::velodyneHandler(const sensor_msgs::msg::PointCloud2::ConstSharedPtr& msg,
@@ -117,6 +130,56 @@ void LidarProcessing::hesaiHandler(const sensor_msgs::msg::PointCloud2::ConstSha
 
         lidar_scan.cloud_->points.push_back(added_point);
     }
+}
+
+void LidarProcessing::livoxHandler(const livox_interfaces::msg::CustomMsg::ConstSharedPtr& msg,
+                                   common::LidarScan& lidar_scan) {
+    lidar_scan.cloud_.reset(new PointCloudType());
+
+    const double stamp_sec = stampToSec(msg->header.stamp);
+    if (msg->points.empty()) {
+        lidar_scan.lidar_begin_time_ = stamp_sec;
+        lidar_scan.lidar_end_time_ = stamp_sec;
+        return;
+    }
+
+    const int cloud_size = static_cast<int>(msg->points.size());
+    lidar_scan.cloud_->points.reserve(cloud_size);
+
+    uint32_t valid_num = 0;
+    double first_point_time = -1.0;
+    double last_point_time = 0.0;
+
+    for (const auto& pt : msg->points) {
+        const uint8_t tag_state = static_cast<uint8_t>(pt.tag & 0x30);
+        if (!(tag_state == 0x10 || tag_state == 0x00)) continue;
+
+        ++valid_num;
+        if (valid_num % static_cast<uint32_t>(config_.filter_num_) != 0U) continue;
+
+        PointType added_point;
+        added_point.x = pt.x;
+        added_point.y = pt.y;
+        added_point.z = pt.z;
+        added_point.intensity = static_cast<float>(pt.reflectivity);
+        if (blindCheck(added_point)) continue;
+
+        const double point_time = config_.time_scale_ * static_cast<double>(pt.offset_time);
+        if (first_point_time < 0.0) { first_point_time = point_time; }
+        last_point_time = point_time;
+
+        added_point.curvature = std::round((point_time - first_point_time) * 500.0) / 500.0;
+        lidar_scan.cloud_->points.push_back(added_point);
+    }
+
+    if (first_point_time < 0.0) {
+        lidar_scan.lidar_begin_time_ = stamp_sec;
+        lidar_scan.lidar_end_time_ = stamp_sec;
+        return;
+    }
+
+    lidar_scan.lidar_begin_time_ = stamp_sec + first_point_time;
+    lidar_scan.lidar_end_time_ = stamp_sec + last_point_time;
 }
 
 }  // namespace legkilo

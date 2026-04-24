@@ -5,6 +5,7 @@
 #include "common/sensor_types.hpp"
 
 #include <glog/logging.h>
+#include <livox_interfaces/msg/custom_msg.hpp>
 #include <pcl_conversions/pcl_conversions.h>
 #include <sensor_msgs/msg/point_cloud2.hpp>
 
@@ -92,6 +93,7 @@ class LidarProcessing {
 
     common::LidarType getLidarType() const;
     void processing(const sensor_msgs::msg::PointCloud2::ConstSharedPtr& msg, common::LidarScan& lidar_scan);
+    void processing(const livox_interfaces::msg::CustomMsg::ConstSharedPtr& msg, common::LidarScan& lidar_scan);
 
     template <typename T>
     inline bool blindCheck(const T& p) {
@@ -102,6 +104,7 @@ class LidarProcessing {
     void velodyneHandler(const sensor_msgs::msg::PointCloud2::ConstSharedPtr& msg, common::LidarScan& lidar_scan);
     void ousterHander(const sensor_msgs::msg::PointCloud2::ConstSharedPtr& msg, common::LidarScan& lidar_scan);
     void hesaiHandler(const sensor_msgs::msg::PointCloud2::ConstSharedPtr& msg, common::LidarScan& lidar_scan);
+    void livoxHandler(const livox_interfaces::msg::CustomMsg::ConstSharedPtr& msg, common::LidarScan& lidar_scan);
     CloudPtr cloud_pcl_;
     Config config_;
 };

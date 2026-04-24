@@ -31,7 +31,7 @@ struct MeasGroup {
     std::deque<KinImuMeas> kin_imus_;
 };
 
-enum class LidarType { VEL = 1, OUSTER = 2, HESAI = 3 };
+enum class LidarType { VEL = 1, OUSTER = 2, HESAI = 3, LIVOX = 4 };
 
 }  // namespace common
 }  // namespace legkilo
